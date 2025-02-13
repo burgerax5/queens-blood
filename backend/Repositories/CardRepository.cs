@@ -19,23 +19,30 @@ namespace backend.Repositories
 		private readonly int MAX_STANDARD = 2;
 		private readonly int MAX_LEGENDARY = 1;
 
-		public CardRepository()
-		{
-			SQLitePCL.Batteries.Init();
+        private void PopulateCards(SqliteConnection connection)
+        {
+            var command = connection.CreateCommand();
+            command.CommandText = @"
+                    SELECT c.*, r.Offset, r.Colour 
+                    FROM Cards c 
+                    LEFT JOIN Ranges r 
+                    ON c.Id = r.CardId;";
 
-			var connectionString = "Data Source=QB_card_info.db";
-			using (var connection = new SqliteConnection(connectionString))
-			{
-				connection.Open();
-				
-				var command = connection.CreateCommand();
-				command.CommandText = "SELECT * FROM Cards UNION ALL SELECT * FROM Ranges";
+            using (var reader = command.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    var card = _cards.Find(c => c.Id == reader.GetInt32(0));
+                    var offsetString = reader.IsDBNull(11) ? null : reader.GetString(11);
+                    var colour = reader.IsDBNull(12) ? null : reader.GetString(12);
 
-				using (var reader = command.ExecuteReader())
-				{
-					while (reader.Read())
-					{
-                        var card = new Card
+                    if (card != null && offsetString != null && colour != null)
+                    {
+                        card.AddRangeCell(offsetString, colour);
+                    }
+                    else
+                    {
+                        card = new Card
                         {
                             Id = reader.GetInt32(0),
                             Name = reader.GetString(1),
@@ -56,11 +63,51 @@ namespace backend.Repositories
 
                         card.Ability = ability;
 
+                        if (card.Ability.Action == "+R" && ability.Value != null)
+                        {
+                            card.RankUpAmount = (int)ability!.Value;
+                        }
+
+                        if (offsetString != null && colour != null)
+                        {
+                            card.AddRangeCell(offsetString, colour);
+                        }
+
                         _cards.Add(card);
-					}
-				}
-			}
-		}
+                    }
+                }
+            }
+        }
+
+        private void SetChildCards(SqliteConnection connection)
+        {
+            var command = connection.CreateCommand();
+            command.CommandText = @"SELECT * FROM ParentChild";
+
+            using (var reader = command.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    var parentID = reader.GetInt32(0);
+                    var childID = reader.GetInt32(1);
+
+                    _cards[parentID - 1].AddChild(_cards[childID - 1]);
+                }
+            }
+        }
+
+        public CardRepository()
+        {
+            SQLitePCL.Batteries.Init();
+
+            var connectionString = "Data Source=QB_card_info.db";
+            using (var connection = new SqliteConnection(connectionString))
+            {
+                connection.Open();
+                PopulateCards(connection);
+                SetChildCards(connection);
+            }
+        }
 
 		public List<Card> GetBaseCards ()
 		{
